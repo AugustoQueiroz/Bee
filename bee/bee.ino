@@ -1,20 +1,48 @@
-// #include <TinyGPS++.h>
+#include "TinyGPS++.h"
 #include <SoftwareSerial.h>
+#include <DS3231.h>
 #include <Wire.h>
 
+/*
+ *  RTC Initializations
+ */
+
+#define DS3231_I2C_ADDRESS 0x68
+
+DS3231 rtc;
+
+/*
+ *  GPS Initialiations
+ */
+
+static const uint32_t GPSBaud = 9600;
+
+/*typedef union {
+    float number;
+    ufloat8_t bytes[2];
+} floatUnion_t;
+
+floatUnion_t auxLat, auxLng;*/
+
+TinyGPSPlus gps;
 static const int RXPin = 4, TXPin = 3;
 SoftwareSerial softSerial(RXPin, TXPin);
 
 void setup() {
     // put your setup code here, to run once:
-    Wire.begin(); // Necessary for the RTC
+    Wire.begin(); // Necessary for the RTCj
+    //setDS3231Time(00,33,17,5,02,11,17); //rtc aqui ja foi setado
+
+    softSerial.begin(GPSBaud); // Serial for the GPS reader
+
     Serial.begin(38400); // Serial for the OBD reader
-    // softSerial.begin(GPSBaud); // Serial for the GPS reader
 }
 
 void loop() {
     // put your main code here, to run repeatedly:
-    OBDManager();
+    //RTCManager();
+    GPSManager();
+    //OBDManager();
 }
 
 /*
@@ -23,6 +51,108 @@ void loop() {
 void clearSerial(void) {
     while (Serial.available() > 0) {
         Serial.read();
+    }
+}
+
+/*
+ *  RTC Functions
+ */
+
+void RTCManager() {
+    switch (0) {
+    case 0:
+        displayTime();
+        break;
+    }
+}
+
+void setDS3231Time(byte second, byte minute, byte hour, byte dayOfWeek, byte dayOfMonth, byte month, byte year) {
+    Wire.beginTransmission(DS3231_I2C_ADDRESS);
+
+    Wire.write(0); // Set next input to start at the seconds register
+    Wire.write(decToBcd(second));
+    Wire.write(decToBcd(minute));
+    Wire.write(decToBcd(hour));
+    Wire.write(decToBcd(dayOfWeek));
+    Wire.write(decToBcd(dayOfMonth));
+    Wire.write(decToBcd(month));
+    Wire.write(decToBcd(year));
+
+    Wire.endTransmission();
+}
+
+void readDS3231Time(byte* second, byte* minute, byte* hour, byte* dayOfWeek, byte* dayOfMonth, byte* month, byte* year) {
+    Wire.beginTransmission(DS3231_I2C_ADDRESS);
+    
+    Wire.write(0); // Set DS3231 register pointer to 00h
+
+    Wire.endTransmission();
+
+    // Request 7 bytes of data from DS3231 starting from register 00h
+    *second = bcdToDec(Wire.read() & 0x7F);
+    *minute = bcdToDec(Wire.read());
+    *hour = bcdToDec(Wire.read() & 0x3F);
+    *dayOfWeek = bcdToDec(Wire.read());
+    *dayOfMonth = bcdToDec(Wire.read());
+    *month = bcdToDec(Wire.read());
+    *year = bcdToDec(Wire.read());
+}
+
+void displayTime() {
+    byte second, minute, hour, dayOfWeek, dayOfMonth, month, year;
+    
+    // readDS3231Time(&second, &minute, &hour, &dayOfWeek, &dayOfMonth, &month, &year);
+
+    bool h12, PM, century;
+
+    hour = rtc.getHour(h12, PM);
+    minute = rtc.getMinute();
+    second = rtc.getSecond();
+    dayOfWeek = rtc.getDoW();
+    dayOfMonth = rtc.getDate();
+    month = rtc.getMonth(century);
+    year = rtc.getYear();
+
+    // Print time
+    Serial.print(hour, DEC);
+    Serial.print(":");
+    if (minute < 10) Serial.print("0");
+    Serial.print(minute, DEC);
+    Serial.print(":");
+    if (second < 10) Serial.print("0");
+    Serial.print(second, DEC);
+    Serial.print(" ");
+
+    // Print date
+    Serial.print(dayOfMonth, DEC);
+    Serial.print("/");
+    Serial.print(month, DEC);
+    Serial.print("/");
+    Serial.print(year, DEC);
+    Serial.println();
+}
+
+byte decToBcd(byte val) {
+    return ((val/10*16) + (val%10));
+}
+
+byte bcdToDec(byte val) {
+    return ((val/16*10) + (val%16));
+}
+
+/*
+ *  GPS Functions
+ */
+
+void GPSManager() {
+    if (false && !gps.location.isValid()) {
+        Serial.println("Cannot get GPS location.");
+    } else {
+        float latitude = gps.location.lat();
+        float longitude = gps.location.lng();
+
+        Serial.println(latitude);
+        Serial.println(longitude);
     }
 }
 
