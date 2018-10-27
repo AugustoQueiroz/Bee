@@ -1,2 +1,5 @@
 # Build files
 BUILD/
+
+# Sublime project
+*.sublime-project
