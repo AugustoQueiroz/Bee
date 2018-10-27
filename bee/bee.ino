@@ -1,21 +1,14 @@
 #include "TinyGPS++.h"
 #include <SoftwareSerial.h>
-#include <DS3231.h>
-#include <Wire.h>
-
-/*
- *  RTC Initializations
- */
-
-#define DS3231_I2C_ADDRESS 0x68
-
-DS3231 rtc;
+#include <SPI.h>
+#include <SD.h>
+#include <MemoryFree.h>
 
 /*
  *  GPS Initialiations
  */
 
-static const uint32_t GPSBaud = 9600;
+const uint32_t GPSBaud = 9600;
 
 /*typedef union {
     float number;
@@ -28,26 +21,59 @@ TinyGPSPlus gps;
 static const int RXPin = 4, TXPin = 3;
 SoftwareSerial softSerial(RXPin, TXPin);
 
+double distanceSinceLastMessage = 0;
+
+/*
+ *  OBD Initializations
+ */
+
+/*
+ *  Package Initializations
+ */
+
+File history;
+File package;
+
+int packageBuilderState = 0;
+
+#define SEND_INTERVAL 10 // Interval between messages in seconds
+
 void setup() {
     // put your setup code here, to run once:
-    Wire.begin(); // Necessary for the RTCj
-    //setDS3231Time(00,33,17,5,02,11,17); //rtc aqui ja foi setado
-
+    //setDS3231Time(10,02,17,5,26,10,18); //rtc aqui ja foi setado 
     softSerial.begin(GPSBaud); // Serial for the GPS reader
 
     Serial.begin(38400); // Serial for the OBD reader
+
+    if (!SD.begin(8)) {
+        Serial.println("SD initialization failed.");
+
+        while (1);
+    }   
+
+    SD.remove("package");
+    SD.remove("history");
+
+    package = SD.open("package", FILE_WRITE);
+    package.close();
+
+    history = SD.open("history", FILE_WRITE);
+    history.close();
 }
 
 void loop() {
     // put your main code here, to run repeatedly:
+    //Serial.print("freeMemory: "); Serial.println(freeMemory());
     //RTCManager();
-    GPSManager();
-    //OBDManager();
+    //GPSManager();
+    OBDManager();
+    PackageManager();
 }
 
 /*
  *  Misc. Functions
  */
+ 
 void clearSerial(void) {
     while (Serial.available() > 0) {
         Serial.read();
@@ -61,83 +87,9 @@ void clearSerial(void) {
 void RTCManager() {
     switch (0) {
     case 0:
-        displayTime();
+        //displayTime();
         break;
     }
-}
-
-void setDS3231Time(byte second, byte minute, byte hour, byte dayOfWeek, byte dayOfMonth, byte month, byte year) {
-    Wire.beginTransmission(DS3231_I2C_ADDRESS);
-
-    Wire.write(0); // Set next input to start at the seconds register
-    Wire.write(decToBcd(second));
-    Wire.write(decToBcd(minute));
-    Wire.write(decToBcd(hour));
-    Wire.write(decToBcd(dayOfWeek));
-    Wire.write(decToBcd(dayOfMonth));
-    Wire.write(decToBcd(month));
-    Wire.write(decToBcd(year));
-
-    Wire.endTransmission();
-}
-
-void readDS3231Time(byte* second, byte* minute, byte* hour, byte* dayOfWeek, byte* dayOfMonth, byte* month, byte* year) {
-    Wire.beginTransmission(DS3231_I2C_ADDRESS);
-    
-    Wire.write(0); // Set DS3231 register pointer to 00h
-
-    Wire.endTransmission();
-
-    // Request 7 bytes of data from DS3231 starting from register 00h
-    *second = bcdToDec(Wire.read() & 0x7F);
-    *minute = bcdToDec(Wire.read());
-    *hour = bcdToDec(Wire.read() & 0x3F);
-    *dayOfWeek = bcdToDec(Wire.read());
-    *dayOfMonth = bcdToDec(Wire.read());
-    *month = bcdToDec(Wire.read());
-    *year = bcdToDec(Wire.read());
-}
-
-void displayTime() {
-    byte second, minute, hour, dayOfWeek, dayOfMonth, month, year;
-    
-    // readDS3231Time(&second, &minute, &hour, &dayOfWeek, &dayOfMonth, &month, &year);
-
-    bool h12, PM, century;
-
-    hour = rtc.getHour(h12, PM);
-    minute = rtc.getMinute();
-    second = rtc.getSecond();
-    dayOfWeek = rtc.getDoW();
-    dayOfMonth = rtc.getDate();
-    month = rtc.getMonth(century);
-    year = rtc.getYear();
-
-    // Print time
-    Serial.print(hour, DEC);
-    Serial.print(":");
-    if (minute < 10) Serial.print("0");
-    Serial.print(minute, DEC);
-    Serial.print(":");
-    if (second < 10) Serial.print("0");
-    Serial.print(second, DEC);
-    Serial.print(" ");
-
-    // Print date
-    Serial.print(dayOfMonth, DEC);
-    Serial.print("/");
-    Serial.print(month, DEC);
-    Serial.print("/");
-    Serial.print(year, DEC);
-    Serial.println();
-}
-
-byte decToBcd(byte val) {
-    return ((val/10*16) + (val%10));
-}
-
-byte bcdToDec(byte val) {
-    return ((val/16*10) + (val%16));
 }
 
 /*
@@ -145,15 +97,53 @@ byte bcdToDec(byte val) {
  */
 
 void GPSManager() {
-    if (false && !gps.location.isValid()) {
-        Serial.println("Cannot get GPS location.");
-    } else {
-        float latitude = gps.location.lat();
-        float longitude = gps.location.lng();
+    static double lastLatitude = 0;
+    static double lastLongitude = 0;
 
-        Serial.println(latitude);
-        Serial.println(longitude);
+    while (softSerial.available() > 0) gps.encode(softSerial.read());
+
+    Serial.println(gps.satellites.value());
+    
+    if (!gps.location.isValid()) {
+        Serial.print("Cannot get GPS location. ["); Serial.print(gps.satellites.value()); Serial.println(" satellites found]");
+    } else {
+        double latitude = gps.location.lat();
+        double longitude = gps.location.lng();
+
+        if (lastLatitude != 0) {
+            distanceSinceLastMessage += distanceBetweenCoordinates(latitude, longitude, lastLatitude, lastLongitude);
+        }
+        lastLatitude = latitude;
+        lastLongitude = longitude;
+
+        //Serial.print("("); Serial.print(lastLatitude, 6); Serial.print(", "); Serial.print(lastLongitude, 6); Serial.print(") -> ("); Serial.print(latitude, 6); Serial.print(", "); Serial.print(longitude, 6); Serial.print(") = ");
+        //Serial.println(distanceSinceLastMessage);
     }
+}
+
+void GPSDelay(unsigned long ms) {
+  unsigned long start = millis();
+
+  while (millis() - start < ms) {
+    if (softSerial.available() > 0) gps.encode(softSerial.read());
+  }
+}
+
+double distanceBetweenCoordinates(double latitude1, double longitude1, double latitude2, double longitude2) {
+    double R = 6371e3;
+    double phi1 = toRadians(latitude1);
+    double phi2 = toRadians(latitude2);
+    double deltaPhi = toRadians(latitude2 - latitude1);
+    double deltaLambda = toRadians(longitude2 - longitude1);
+
+    double a = sin(deltaPhi/2) * sin(deltaPhi/2) + cos(phi1)*cos(phi2)*sin(deltaLambda/2)*sin(deltaLambda/2);
+    double c = 2*atan2(sqrt(a), sqrt(1-a));
+
+    return R*c;
+}
+
+double toRadians(double angle) {
+    return angle*PI/180;
 }
 
 /*
@@ -162,11 +152,11 @@ void GPSManager() {
 
 typedef int (*parseFunc)(char*);
 
-int allowedPIDs[13] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+int allowedPIDs[13] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
 
 parseFunc parseFuncs[] = { 
     NULL, 
-    NULL, 
+    parseMIL, 
     NULL, 
     NULL, 
     parsePercentage, 
@@ -229,77 +219,91 @@ void getAllowedPIDs() {
 
     Serial.println("0100");
     response = getResponse();
-    delay(1000);
+    GPSDelay(1000);
     response = getResponse();
-    delay(200);
+    GPSDelay(200);
     allowedPIDs[0] = ((int) response[0] << 8) | (int) response[1];
     allowedPIDs[1] = ((int) response[2] << 8) | (int) response[3];
 
     Serial.println("0120");
     response = getResponse();
-    delay(1000);
+    GPSDelay(1000);
     response = getResponse();
-    delay(200);
+    GPSDelay(200);
     allowedPIDs[2] = ((int) response[0] << 8) | (int) response[1];
     allowedPIDs[3] = ((int) response[2] << 8) | (int) response[3];
 
     Serial.println("0140");
     response = getResponse();
-    delay(1000);
+    GPSDelay(1000);
     response = getResponse();
-    delay(200);
+    GPSDelay(200);
     allowedPIDs[4] = ((int) response[0] << 8) | (int) response[1];
     allowedPIDs[5] = ((int) response[2] << 8) | (int) response[3];
 
     Serial.println("0160");
     response = getResponse();
-    delay(1000);
+    GPSDelay(1000);
     response = getResponse();
-    delay(200);
+    GPSDelay(200);
     allowedPIDs[6] = ((int) response[0] << 8) | (int) response[1];
     allowedPIDs[7] = ((int) response[2] << 8) | (int) response[3];
     
     Serial.println("0180");
     response = getResponse();
-    delay(1000);
+    GPSDelay(1000);
     response = getResponse();
-    delay(200);
+    GPSDelay(200);
     allowedPIDs[8] = ((int) response[0] << 8) | (int) response[1];
     allowedPIDs[9] = ((int) response[2] << 8) | (int) response[3];
 
     Serial.println("01A0");
     response = getResponse();
-    delay(1000);
+    GPSDelay(1000);
     response = getResponse();
-    delay(200);
+    GPSDelay(200);
     allowedPIDs[10] = ((int) response[0] << 8) | (int) response[1];
     allowedPIDs[11] = ((int) response[2] << 8) | (int) response[3];
 }
 
 void OBDManager() {
-    static char iPID = 0;
+    static unsigned char iPID = 0;
+
+    Serial.println(iPID);
 
     if (allowedPIDs[iPID/16] & (1 << (16 - iPID%16))) {
         String PID = String(String("01") + String((iPID < 16) ? "0" : "") + String(iPID, HEX));
         
         int result = obdRead(PID);
+
         // Do stuff with the result
+        if (packageBuilderState == 2)
+          savePID(PID, result);
     }
 
     iPID++;
+
+    if (iPID > 0xC4) {
+        iPID = 0;
+
+        if (packageBuilderState == 1 || packageBuilderState == 2) {
+            packageBuilderState++;
+            Serial.println("Starting to save PIDs/PIDs Saved");
+        }
+    }
 }
 
 int obdRead(String PID) {
     char iPID = parsePID(PID); // Use the PID to know what function to use for parsing
     char* response;
-    Serial.println(PID);
+    //Serial.println(PID);
 
+    /*response = getResponse();
+    GPSDelay(1000);
     response = getResponse();
-    delay(1000);
-    response = getResponse();
-    delay(200);
+    GPSDelay(200);*/
 
-    if (iPID < 92 && parseFuncs[iPID] != NULL) {
+    if (false && iPID < 92 && parseFuncs[iPID] != NULL) {
         return parseFuncs[iPID](response);
     } else {
         return 0;
@@ -336,6 +340,12 @@ char* getResponse(void) {
  *  Parse Formulas from
  *  https://en.m.wikipedia.org/wiki/OBD-II_PIDs
  */
+
+int parseMIL(char* response) {
+    char A = response[0];
+
+    return A & (1 << 7);
+}
 
 int parseTemperature(char* response) {
     char A = response[0];
@@ -427,4 +437,230 @@ char parsePID(String PID) {
     char tmp[3] = {PID[2], PID[3], '\0'};
     
     return strtol(tmp, NULL, 16);
+}
+
+/*
+ *  Package Functions
+ *  
+ *  "msgId" : {
+ *      "datestamp": "YYYY-MM-DD",
+ *      "hourstamp": "HH:MM:SS+03:00",
+ *      "pids": {
+ *          "pid": "val",
+ *          "pid": "val"
+ *      },
+ *      "placa": "AAA-0000"
+ *  }
+ */
+
+void PackageManager() {
+    static unsigned long lastReset = millis();
+
+    if (millis() - lastReset > SEND_INTERVAL * 1000) {
+        Serial.println("now yes");
+        switch (packageBuilderState) {
+        case 0:
+            startPackage();
+            saveTimestamp();
+            savePosition();
+            saveDistanceTravelled();
+            startPIDs();
+            packageBuilderState++;
+            break;
+        case 1:
+            break;
+        case 2:
+            break;
+        case 3:
+            endPIDs();
+            endPackage();
+            sendPackage();
+            lastReset = millis();
+            packageBuilderState = 0;
+            break;
+        }
+    } else {
+        Serial.println("not yet");
+    }
+}
+
+void startPackage() {
+    package = SD.open("package", FILE_WRITE);
+
+    if (package) {
+        package.println("\"msg\" : {");
+
+        package.close();
+    } else {
+      Serial.println("Could not open 'package' to start package.");
+    }
+}
+
+void saveTimestamp() {
+    // Timestamp format: YYYY-MM-DDTHH:MM:SS+03:00
+    package = SD.open("package", FILE_WRITE);
+    
+    if (package) {
+        package.print("\t\"timestamp\": \"");
+        char timestamp[] = "YYYY-MM-DDTHH:MM:SS-03:00";
+        sprintf(timestamp, "20%02d-%02d-%02dT%02d:%02d:%02d-03:00", gps.date.year(), gps.date.month(), gps.date.day(), gps.time.hour(), gps.time.minute(), gps.time.second());
+        package.print(timestamp);
+        package.println("\",");
+
+        package.close();
+    } else {
+      Serial.println("Could not open 'package' to save TimeStamp.");
+    }
+}
+
+void savePosition() {
+    package = SD.open("package", FILE_WRITE);
+    
+    if (package) {
+        package.println("\t\"coord\": {");
+        package.print("\t\t\"lat\": "); package.print(gps.location.lat(), 6); package.println(",");
+        package.print("\t\t\"long\": "); package.print(gps.location.lng(), 6); package.println(",");
+        package.println("\t},");
+
+        package.close();
+    }
+}
+
+void saveDistanceTravelled() {
+    package = SD.open("package", FILE_WRITE);
+
+    if (package) {
+        package.print("\t\"distanceTravelled\": ");
+        package.print(distanceSinceLastMessage, 6); package.println(",");
+
+        package.close();
+    }
+}
+
+void startPIDs() {
+    package = SD.open("package", FILE_WRITE);
+    
+    if (package) {
+        package.println("\t\"pids\": {");
+
+        package.close();
+    } else {
+      Serial.println("Could not open 'package' to start PIDs.");
+    }
+}
+
+void savePID(String PID, int val) {
+    package = SD.open("package", FILE_WRITE);
+
+    if (package) {
+        package.print("\t\t\"" + PID + "\": ");
+        package.print(val);
+        package.println(",");
+
+        package.close();
+    } else {
+        Serial.println("Could not open 'package' to save PID.");
+    }
+}
+
+void endPIDs() {
+    package = SD.open("package", FILE_WRITE);
+    
+    if (package) {
+        package.println("\t},");
+
+        package.close();
+    } else {
+      Serial.println("Could not open 'package' to end PIDs.");
+    }
+}
+
+void endPackage() {
+    package = SD.open("package", FILE_WRITE);
+    
+    if (package) {
+        package.println("\t\"placa\": \"PCU-3455\"");
+        package.println("}");
+
+        package.close();
+    } else {
+      Serial.println("Could not open 'package' to end it.");
+    }
+}
+
+void readPackage() {
+    package = SD.open("package");
+
+    if (package) {
+        Serial.println("Contents of 'package':");
+
+        while (package.available()) {
+            Serial.write(package.read());
+        }
+
+        package.close();
+    } else {
+      Serial.println("Could not open 'package' to read.");
+    }
+}
+
+void readPackageInto(char* packageStr) {
+    int packageStrSize = 1;
+    int packageStrPosition = 0;
+    packageStr = (char*)malloc(sizeof(char));
+  
+    package = SD.open("package");
+
+    if (package) {
+        while (package.available()) {
+            if (packageStrPosition == packageStrSize) {
+                packageStrSize += 10;
+                packageStr = (char*)realloc(packageStr, packageStrSize*sizeof(char));
+            }
+
+            packageStr[packageStrPosition++] = package.read();
+        }
+
+        if (packageStrPosition == packageStrSize) {
+            packageStrSize++;
+            packageStr = (char*)realloc(packageStr, packageStrSize*sizeof(char));
+        } else if (packageStrPosition < packageStrSize) {
+            packageStr = (char*)realloc(packageStr, (packageStrPosition+2)*sizeof(char));          
+        }
+        packageStr[packageStrPosition++] = 0;
+
+        package.close();
+    }
+}
+
+void clearPackage() {
+    SD.remove("package");
+
+    package = SD.open("package", FILE_WRITE);
+    package.close();
+}
+
+void saveToHistory(char* package) {
+    history = SD.open("history", FILE_WRITE);
+
+    if (history) {
+        history.println(package);
+
+        history.close();
+    }
+}
+
+void sendPackage() {
+    Serial.println("Sending package...");
+
+    SD.remove("package");
+    char* package;
+
+    readPackageInto(package);
+    saveToHistory(package);
+
+    // Send it via Tellit
+    
+    free(package);
+    distanceSinceLastMessage = 0;
 }
