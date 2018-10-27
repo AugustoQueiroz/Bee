@@ -1,8 +1,7 @@
-#include "TinyGPS++.h"
+#include "TinyGPS.h"
 #include <SoftwareSerial.h>
 #include <SPI.h>
 #include <SD.h>
-#include <MemoryFree.h>
 
 /*
  *  GPS Initialiations
@@ -10,18 +9,13 @@
 
 const uint32_t GPSBaud = 9600;
 
-/*typedef union {
-    float number;
-    ufloat8_t bytes[2];
-} floatUnion_t;
-
-floatUnion_t auxLat, auxLng;*/
-
-TinyGPSPlus gps;
+TinyGPS gps;
 static const int RXPin = 4, TXPin = 3;
 SoftwareSerial softSerial(RXPin, TXPin);
 
-double distanceSinceLastMessage = 0;
+float distanceSinceLastMessage = 0;
+float currentLatitude = TinyGPS::GPS_INVALID_F_ANGLE;
+float currentLongitude = TinyGPS::GPS_INVALID_F_ANGLE;
 
 /*
  *  OBD Initializations
@@ -40,7 +34,6 @@ int packageBuilderState = 0;
 
 void setup() {
     // put your setup code here, to run once:
-    //setDS3231Time(10,02,17,5,26,10,18); //rtc aqui ja foi setado 
     softSerial.begin(GPSBaud); // Serial for the GPS reader
 
     Serial.begin(38400); // Serial for the OBD reader
@@ -63,9 +56,8 @@ void setup() {
 
 void loop() {
     // put your main code here, to run repeatedly:
-    //Serial.print("freeMemory: "); Serial.println(freeMemory());
     //RTCManager();
-    //GPSManager();
+    GPSManager();
     OBDManager();
     PackageManager();
 }
@@ -100,24 +92,20 @@ void GPSManager() {
     static double lastLatitude = 0;
     static double lastLongitude = 0;
 
-    while (softSerial.available() > 0) gps.encode(softSerial.read());
+    while (softSerial.available() > 0) {
+        if (gps.encode(softSerial.read())) {
+            float latitude, longitude;
+            
+            gps.f_get_position(&latitude, &longitude);
+            
+            Serial.print("lat: "); Serial.print(latitude, 6); Serial.print(" lng: "); Serial.println(longitude, 6);
 
-    Serial.println(gps.satellites.value());
-    
-    if (!gps.location.isValid()) {
-        Serial.print("Cannot get GPS location. ["); Serial.print(gps.satellites.value()); Serial.println(" satellites found]");
-    } else {
-        double latitude = gps.location.lat();
-        double longitude = gps.location.lng();
-
-        if (lastLatitude != 0) {
-            distanceSinceLastMessage += distanceBetweenCoordinates(latitude, longitude, lastLatitude, lastLongitude);
+            if (lastLatitude != 0) {
+                distanceSinceLastMessage += distanceBetweenCoordinates(latitude, longitude, lastLatitude, lastLongitude);
+            }
+            lastLatitude = latitude;
+            lastLongitude = longitude;
         }
-        lastLatitude = latitude;
-        lastLongitude = longitude;
-
-        //Serial.print("("); Serial.print(lastLatitude, 6); Serial.print(", "); Serial.print(lastLongitude, 6); Serial.print(") -> ("); Serial.print(latitude, 6); Serial.print(", "); Serial.print(longitude, 6); Serial.print(") = ");
-        //Serial.println(distanceSinceLastMessage);
     }
 }
 
@@ -503,7 +491,10 @@ void saveTimestamp() {
     if (package) {
         package.print("\t\"timestamp\": \"");
         char timestamp[] = "YYYY-MM-DDTHH:MM:SS-03:00";
-        sprintf(timestamp, "20%02d-%02d-%02dT%02d:%02d:%02d-03:00", gps.date.year(), gps.date.month(), gps.date.day(), gps.time.hour(), gps.time.minute(), gps.time.second());
+        int year;
+        byte month, day, hour, minutes, second, hundredths;
+        gps.crack_datetime(&year, &month, &day, &hour, &minutes, &second, &hundredths);
+        sprintf(timestamp, "%02d-%02d-%02dT%02d:%02d:%02d-03:00", year, month, day, hour, minutes, second);
         package.print(timestamp);
         package.println("\",");
 
@@ -518,8 +509,8 @@ void savePosition() {
     
     if (package) {
         package.println("\t\"coord\": {");
-        package.print("\t\t\"lat\": "); package.print(gps.location.lat(), 6); package.println(",");
-        package.print("\t\t\"long\": "); package.print(gps.location.lng(), 6); package.println(",");
+        //package.print("\t\t\"lat\": "); package.print(gps.location.lat(), 6); package.println(",");
+        //package.print("\t\t\"long\": "); package.print(gps.location.lng(), 6); package.println(",");
         package.println("\t},");
 
         package.close();
