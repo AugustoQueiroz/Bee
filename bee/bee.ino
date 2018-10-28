@@ -7,51 +7,62 @@
  *  GPS Initialiations
  */
 
-const uint32_t GPSBaud = 9600;
+#define GPSBaud 9600
 
 TinyGPS gps;
-static const int RXPin = 4, TXPin = 3;
+#define RXPin 4
+#define TXPin 3
 SoftwareSerial softSerial(RXPin, TXPin);
 
 float distanceSinceLastMessage = 0;
-float currentLatitude = TinyGPS::GPS_INVALID_F_ANGLE;
-float currentLongitude = TinyGPS::GPS_INVALID_F_ANGLE;
+float latitude = TinyGPS::GPS_INVALID_F_ANGLE;
+float longitude = TinyGPS::GPS_INVALID_F_ANGLE;
 
 /*
  *  OBD Initializations
  */
 
+typedef int (*parseFunc)(char*);
+
+unsigned int allowedPIDs[12] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+
+SoftwareSerial obdSerial(5, 6);
+
 /*
  *  Package Initializations
  */
 
-File history;
+//File history;
 File package;
 
-int packageBuilderState = 0;
+byte packageBuilderState = 0;
 
 #define SEND_INTERVAL 10 // Interval between messages in seconds
 
 void setup() {
     // put your setup code here, to run once:
     softSerial.begin(GPSBaud); // Serial for the GPS reader
+    obdSerial.begin(38400);
 
-    Serial.begin(38400); // Serial for the OBD reader
+    Serial.begin(9600); // Hardware Serial
+
+    getAllowedPIDs();
 
     if (!SD.begin(8)) {
-        Serial.println("SD initialization failed.");
+        //Serial.println(F("SD initialization failed."));
 
         while (1);
-    }   
+    }
+    Serial.println(F("SD successfully initiated."));
 
-    SD.remove("package");
-    SD.remove("history");
+    SD.remove(F("package"));
+    //SD.remove(F("history"));
 
-    package = SD.open("package", FILE_WRITE);
+    package = SD.open(F("package"), FILE_WRITE);
     package.close();
 
-    history = SD.open("history", FILE_WRITE);
-    history.close();
+    //history = SD.open(F("history"), FILE_WRITE);
+    //history.close();
 }
 
 void loop() {
@@ -89,16 +100,16 @@ void RTCManager() {
  */
 
 void GPSManager() {
-    static double lastLatitude = 0;
-    static double lastLongitude = 0;
+    static float lastLatitude = 0;
+    static float lastLongitude = 0;
+
+    //Serial.println(F("doing GPS stuff"));
 
     while (softSerial.available() > 0) {
-        if (gps.encode(softSerial.read())) {
-            float latitude, longitude;
-            
+        if (gps.encode(softSerial.read())) {            
             gps.f_get_position(&latitude, &longitude);
             
-            Serial.print("lat: "); Serial.print(latitude, 6); Serial.print(" lng: "); Serial.println(longitude, 6);
+            //Serial.print("lat: "); Serial.print(latitude, 6); Serial.print(" lng: "); Serial.println(longitude, 6);
 
             if (lastLatitude != 0) {
                 distanceSinceLastMessage += distanceBetweenCoordinates(latitude, longitude, lastLatitude, lastLongitude);
@@ -109,28 +120,20 @@ void GPSManager() {
     }
 }
 
-void GPSDelay(unsigned long ms) {
-  unsigned long start = millis();
+float distanceBetweenCoordinates(float latitude1, float longitude1, float latitude2, float longitude2) {
+    float R = 6371e3;
+    float phi1 = toRadians(latitude1);
+    float phi2 = toRadians(latitude2);
+    float deltaPhi = toRadians(latitude2 - latitude1);
+    float deltaLambda = toRadians(longitude2 - longitude1);
 
-  while (millis() - start < ms) {
-    if (softSerial.available() > 0) gps.encode(softSerial.read());
-  }
-}
-
-double distanceBetweenCoordinates(double latitude1, double longitude1, double latitude2, double longitude2) {
-    double R = 6371e3;
-    double phi1 = toRadians(latitude1);
-    double phi2 = toRadians(latitude2);
-    double deltaPhi = toRadians(latitude2 - latitude1);
-    double deltaLambda = toRadians(longitude2 - longitude1);
-
-    double a = sin(deltaPhi/2) * sin(deltaPhi/2) + cos(phi1)*cos(phi2)*sin(deltaLambda/2)*sin(deltaLambda/2);
-    double c = 2*atan2(sqrt(a), sqrt(1-a));
+    float a = sin(deltaPhi/2) * sin(deltaPhi/2) + cos(phi1)*cos(phi2)*sin(deltaLambda/2)*sin(deltaLambda/2);
+    float c = 2*atan2(sqrt(a), sqrt(1-a));
 
     return R*c;
 }
 
-double toRadians(double angle) {
+float toRadians(float angle) {
     return angle*PI/180;
 }
 
@@ -138,18 +141,17 @@ double toRadians(double angle) {
  *  OBD Functions
  */
 
-typedef int (*parseFunc)(char*);
-
-int allowedPIDs[13] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
-
-parseFunc parseFuncs[] = { 
+const parseFunc parseFuncs[] PROGMEM = { 
     NULL, 
     parseMIL, 
     NULL, 
     NULL, 
     parsePercentage, 
     parseTemperature, 
-    parsePercentage, 
+    parsePercentage,
+    parsePercentage,
+    parsePercentage,
+    parsePercentage,
     parsePressure765, 
     parsePressure255, 
     parseRPM, 
@@ -205,62 +207,62 @@ parseFunc parseFuncs[] = {
 void getAllowedPIDs() {
     char* response;
 
-    Serial.println("0100");
+    obdSerial.println(F("0100"));
     response = getResponse();
-    GPSDelay(1000);
+    delay(1000);
     response = getResponse();
-    GPSDelay(200);
-    allowedPIDs[0] = ((int) response[0] << 8) | (int) response[1];
-    allowedPIDs[1] = ((int) response[2] << 8) | (int) response[3];
+    delay(200);
+    allowedPIDs[0] = ((unsigned int) response[0] << 8) | (unsigned int) response[1];
+    allowedPIDs[1] = ((unsigned int) response[2] << 8) | (unsigned int) response[3];
 
-    Serial.println("0120");
+    obdSerial.println(F("0120"));
     response = getResponse();
-    GPSDelay(1000);
+    delay(1000);
     response = getResponse();
-    GPSDelay(200);
-    allowedPIDs[2] = ((int) response[0] << 8) | (int) response[1];
-    allowedPIDs[3] = ((int) response[2] << 8) | (int) response[3];
+    delay(200);
+    allowedPIDs[2] = ((unsigned int) response[0] << 8) | (unsigned int) response[1];
+    allowedPIDs[3] = ((unsigned int) response[2] << 8) | (unsigned int) response[3];
 
-    Serial.println("0140");
+    obdSerial.println(F("0140"));
     response = getResponse();
-    GPSDelay(1000);
+    delay(1000);
     response = getResponse();
-    GPSDelay(200);
-    allowedPIDs[4] = ((int) response[0] << 8) | (int) response[1];
-    allowedPIDs[5] = ((int) response[2] << 8) | (int) response[3];
+    delay(200);
+    allowedPIDs[4] = ((unsigned int) response[0] << 8) | (unsigned int) response[1];
+    allowedPIDs[5] = ((unsigned int) response[2] << 8) | (unsigned int) response[3];
 
-    Serial.println("0160");
+    obdSerial.println(F("0160"));
     response = getResponse();
-    GPSDelay(1000);
+    delay(1000);
     response = getResponse();
-    GPSDelay(200);
-    allowedPIDs[6] = ((int) response[0] << 8) | (int) response[1];
-    allowedPIDs[7] = ((int) response[2] << 8) | (int) response[3];
+    delay(200);
+    allowedPIDs[6] = ((unsigned int) response[0] << 8) | (unsigned int) response[1];
+    allowedPIDs[7] = ((unsigned int) response[2] << 8) | (unsigned int) response[3];
     
-    Serial.println("0180");
+    obdSerial.println(F("0180"));
     response = getResponse();
-    GPSDelay(1000);
+    delay(1000);
     response = getResponse();
-    GPSDelay(200);
-    allowedPIDs[8] = ((int) response[0] << 8) | (int) response[1];
-    allowedPIDs[9] = ((int) response[2] << 8) | (int) response[3];
+    delay(200);
+    allowedPIDs[8] = ((unsigned int) response[0] << 8) | (unsigned int) response[1];
+    allowedPIDs[9] = ((unsigned int) response[2] << 8) | (unsigned int) response[3];
 
-    Serial.println("01A0");
+    obdSerial.println(F("01A0"));
     response = getResponse();
-    GPSDelay(1000);
+    delay(1000);
     response = getResponse();
-    GPSDelay(200);
-    allowedPIDs[10] = ((int) response[0] << 8) | (int) response[1];
-    allowedPIDs[11] = ((int) response[2] << 8) | (int) response[3];
+    delay(200);
+    allowedPIDs[10] = ((unsigned int) response[0] << 8) | (unsigned int) response[1];
+    allowedPIDs[11] = ((unsigned int) response[2] << 8) | (unsigned int) response[3];
 }
 
 void OBDManager() {
     static unsigned char iPID = 0;
 
-    Serial.println(iPID);
+    //Serial.println(F("doing OBD stuff"));
 
     if (allowedPIDs[iPID/16] & (1 << (16 - iPID%16))) {
-        String PID = String(String("01") + String((iPID < 16) ? "0" : "") + String(iPID, HEX));
+        String PID = String(String(F("01")) + String((iPID < 16) ? F("0") : F("")) + String(iPID, HEX));
         
         int result = obdRead(PID);
 
@@ -276,7 +278,7 @@ void OBDManager() {
 
         if (packageBuilderState == 1 || packageBuilderState == 2) {
             packageBuilderState++;
-            Serial.println("Starting to save PIDs/PIDs Saved");
+            //Serial.println("Starting to save PIDs/PIDs Saved");
         }
     }
 }
@@ -284,41 +286,42 @@ void OBDManager() {
 int obdRead(String PID) {
     char iPID = parsePID(PID); // Use the PID to know what function to use for parsing
     char* response;
-    //Serial.println(PID);
+    obdSerial.println(PID);
+    //Serial.print(F("Reading ")); Serial.println((int)iPID);
 
-    /*response = getResponse();
-    GPSDelay(1000);
     response = getResponse();
-    GPSDelay(200);*/
+    delay(1000);
+    response = getResponse();
+    delay(200);
 
-    if (false && iPID < 92 && parseFuncs[iPID] != NULL) {
-        return parseFuncs[iPID](response);
+    if (parseFuncs[iPID] != NULL) {
+        parseFunc pF = pgm_read_byte_near(parseFuncs + iPID);
+        return pF(response);
     } else {
         return 0;
     }
 }
 
 char* getResponse(void) {
-    char response[20];
+    static char response[20];
     char inChar = 0;
     char index = 0;
 
     // Keep reading chars from OBD until receives a carriage return (\r)
     while (inChar != '\r') {
-        if (Serial.available() > 0) { // There is something to be read on the Serial port
-            if ((Serial.peek() == 0x3E) || (Serial.peek() == '\0') || (Serial.peek() == '\r')) {
-                inChar = Serial.read();
+        if (obdSerial.available() > 0) { // There is something to be read on the Serial port
+            inChar = obdSerial.read();
+            if ((inChar == 0x3E) || (inChar == '\0') || (inChar == '\r')) {
                 response[index] = '\0';
                 index = 0;
             } else {
-                inChar = Serial.read();
                 response[index++] = inChar;
             }
         }
     }
 
     // Clean the Serial bugger if there is anything left
-    clearSerial();
+    clearOBDSerial();
 
     // Parse the received string and return it
     return parseHex(response);
@@ -360,56 +363,37 @@ int parsePressure765(char* response) {
 }
 
 int parseRPM(char* response) {
-    char A = response[0],
-         B = response[1];
-
-    return (256*A + B)/4;
+    return (256*response[0] + response[1])/4;
 }
 
 int parseSpeed(char* response) {
-    char A = response[0];
-
-    return A;
+    return response[0];
 }
 
 int parseAirFlowRate(char* response) {
-    char A = response[0],
-         B = response[1];
-
-    return (256*A + B)/100;
+    return (256*response[0] + response[1])/100;
 }
 
 int parseSeconds(char* response) {
-    char A = response[0],
-         B = response[1];
-
-    return 256*A + B;
+    return 256*response[0] + response[1];
 }
 
 int parseDistance(char* response) {
-    char A = response[0],
-         B = response[1];
-
-    return 256*A + B;
+    return 256*response[0] + response[1];
 }
 
 int parseMinutes(char* response) {
-    char A = response[0],
-         B = response[1];
-
-    return 256*A + B;
+    return 256*response[0] + response[1];
 }
 
 int parseCount(char* response) {
-  char A = response[0];
-
-  return A;
+  return response[0];
 }
 
 char* parseHex(char* data) {
     char tmp[3] = {' ', ' ', '\0'};
-    static char response[4];
-    int i, j;
+    static unsigned char response[4];
+    char i, j;
     
     for (i = 0, j = 6; i < 4; i++, j += 3) {
         tmp[0] = data[j];
@@ -425,6 +409,12 @@ char parsePID(String PID) {
     char tmp[3] = {PID[2], PID[3], '\0'};
     
     return strtol(tmp, NULL, 16);
+}
+
+void clearOBDSerial(void) {
+    while (obdSerial.available() > 0) {
+        obdSerial.read();
+    }
 }
 
 /*
@@ -444,15 +434,16 @@ char parsePID(String PID) {
 void PackageManager() {
     static unsigned long lastReset = millis();
 
+    ///Serial.println(F("doing SD stuff"));
+
     if (millis() - lastReset > SEND_INTERVAL * 1000) {
-        Serial.println("now yes");
         switch (packageBuilderState) {
         case 0:
-            startPackage();
-            saveTimestamp();
-            savePosition();
-            saveDistanceTravelled();
-            startPIDs();
+            startPackage(); // Mem - 3%
+            saveTimestamp(); // Mem - 6%
+            savePosition(); // Mem - 0%
+            saveDistanceTravelled(); // Mem - 2%
+            startPIDs(); // Mem - 3%
             packageBuilderState++;
             break;
         case 1:
@@ -460,140 +451,122 @@ void PackageManager() {
         case 2:
             break;
         case 3:
-            endPIDs();
-            endPackage();
-            sendPackage();
+            endPIDs(); // Mem - 2%
+            endPackage(); // Mem - 3%
+            //sendPackage(); // Mem - 1%
             lastReset = millis();
+            distanceSinceLastMessage = 0;
             packageBuilderState = 0;
             break;
         }
     } else {
-        Serial.println("not yet");
+        //Serial.println(SEND_INTERVAL * 1000 - (millis() - lastReset));
     }
 }
 
 void startPackage() {
-    package = SD.open("package", FILE_WRITE);
+    package = SD.open(F("package"), FILE_WRITE);
 
+    Serial.println(F("starting package"));
     if (package) {
-        package.println("\"msg\" : {");
-
-        package.close();
+        //package.write('h');
+        //package.println("\"msg\" : {");
     } else {
-      Serial.println("Could not open 'package' to start package.");
+        //Serial.println(F("error starting package"));
     }
 }
 
 void saveTimestamp() {
     // Timestamp format: YYYY-MM-DDTHH:MM:SS+03:00
-    package = SD.open("package", FILE_WRITE);
+    Serial.println(F("saving timestamp"));
     
     if (package) {
-        package.print("\t\"timestamp\": \"");
-        char timestamp[] = "YYYY-MM-DDTHH:MM:SS-03:00";
+        package.print(F("\t\"timestamp\": \""));
+        
         int year;
         byte month, day, hour, minutes, second, hundredths;
         gps.crack_datetime(&year, &month, &day, &hour, &minutes, &second, &hundredths);
+        
+        char timestamp[25];
         sprintf(timestamp, "%02d-%02d-%02dT%02d:%02d:%02d-03:00", year, month, day, hour, minutes, second);
+        
         package.print(timestamp);
         package.println("\",");
-
-        package.close();
-    } else {
-      Serial.println("Could not open 'package' to save TimeStamp.");
     }
 }
 
 void savePosition() {
-    package = SD.open("package", FILE_WRITE);
-    
+    Serial.println(F("saving position"));
+  
     if (package) {
-        package.println("\t\"coord\": {");
-        //package.print("\t\t\"lat\": "); package.print(gps.location.lat(), 6); package.println(",");
-        //package.print("\t\t\"long\": "); package.print(gps.location.lng(), 6); package.println(",");
-        package.println("\t},");
-
-        package.close();
+        package.println(F("\t\"coord\": {"));
+        package.print(F("\t\t\"lat\": ")); package.print(latitude, 6); package.println(F(","));
+        package.print(F("\t\t\"long\": ")); package.print(longitude, 6); package.println(F(","));
+        package.println(F("\t},"));
     }
 }
 
 void saveDistanceTravelled() {
-    package = SD.open("package", FILE_WRITE);
-
+    Serial.println(F("saving distance travelled"));
+  
     if (package) {
-        package.print("\t\"distanceTravelled\": ");
-        package.print(distanceSinceLastMessage, 6); package.println(",");
-
-        package.close();
+        package.print(F("\t\"distanceTravelled\": "));
+        package.print(distanceSinceLastMessage, 6); package.println(F(","));
     }
 }
 
 void startPIDs() {
-    package = SD.open("package", FILE_WRITE);
-    
-    if (package) {
-        package.println("\t\"pids\": {");
+    Serial.println(F("starting PID section"));
 
-        package.close();
-    } else {
-      Serial.println("Could not open 'package' to start PIDs.");
+    if (package) {
+        package.println(F("\t\"pids\": {"));
     }
 }
 
 void savePID(String PID, int val) {
-    package = SD.open("package", FILE_WRITE);
-
+    Serial.println(F("saving PID"));
+    
     if (package) {
-        package.print("\t\t\"" + PID + "\": ");
+        package.print(F("\t\t\"")); package.print(PID);package.print(F("\": "));
         package.print(val);
-        package.println(",");
-
-        package.close();
-    } else {
-        Serial.println("Could not open 'package' to save PID.");
+        package.println(F(","));
     }
 }
 
 void endPIDs() {
-    package = SD.open("package", FILE_WRITE);
+    Serial.println(F("ending PID section"));
     
     if (package) {
-        package.println("\t},");
-
-        package.close();
-    } else {
-      Serial.println("Could not open 'package' to end PIDs.");
+        package.println(F("\t},"));
     }
 }
 
 void endPackage() {
-    package = SD.open("package", FILE_WRITE);
+    Serial.println(F("ending package"));
     
     if (package) {
-        package.println("\t\"placa\": \"PCU-3455\"");
-        package.println("}");
+        package.println(F("\t\"placa\": \"PCU-3455\""));
+        package.println(F("}"));
 
         package.close();
-    } else {
-      Serial.println("Could not open 'package' to end it.");
     }
 }
 
+/*
 void readPackage() {
-    package = SD.open("package");
+    package = SD.open(F("package"));
 
     if (package) {
-        Serial.println("Contents of 'package':");
+        Serial.println(F("Contents of 'package':"));
 
         while (package.available()) {
             Serial.write(package.read());
         }
 
         package.close();
-    } else {
-      Serial.println("Could not open 'package' to read.");
     }
 }
+
 
 void readPackageInto(char* packageStr) {
     int packageStrSize = 1;
@@ -625,14 +598,14 @@ void readPackageInto(char* packageStr) {
 }
 
 void clearPackage() {
-    SD.remove("package");
+    SD.remove(F("package"));
 
-    package = SD.open("package", FILE_WRITE);
+    package = SD.open(F("package"), FILE_WRITE);
     package.close();
 }
 
 void saveToHistory(char* package) {
-    history = SD.open("history", FILE_WRITE);
+    history = SD.open(F("history"), FILE_WRITE);
 
     if (history) {
         history.println(package);
@@ -642,16 +615,16 @@ void saveToHistory(char* package) {
 }
 
 void sendPackage() {
-    Serial.println("Sending package...");
-
-    SD.remove("package");
+    //Serial.println(F("Sending package..."));
     char* package;
 
     readPackageInto(package);
     saveToHistory(package);
 
+    clearPackage();
+
     // Send it via Tellit
     
     free(package);
     distanceSinceLastMessage = 0;
-}
+}*/
