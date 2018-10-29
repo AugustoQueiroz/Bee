@@ -17,5 +17,6 @@ int16_t parseSpeed(char *response);
 int16_t parseTemperature(char *response);
 void clearOBDSerial(void);
 void getAllowedPIDs();
-void GPSManager()
+void GPSManager();
 void OBDManager();
+void PackageManager();

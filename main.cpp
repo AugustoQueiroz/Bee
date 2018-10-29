@@ -1,17 +1,34 @@
 #include "stm32f103c8t6.h"
 #include "mbed.h"
+#include "TinyGPS.h"
 #include <string>
 #include "main.h"
 #include "pins.h"
 #include "config.h"
 
+
+/*
+ *  Serial Init
+ */
 // TX, RX, BAUD
 RawSerial telitSerial(TELIT_TX, TELIT_RX, TELIT_BAUD);
 RawSerial obdSerial(OBD_RX, OBD_TX, OBD_BAUD);
-RawSerial gpserial(GPS_RX, GPS_TX, GPS_BAUD);
+RawSerial gpsSerial(GPS_RX, GPS_TX, GPS_BAUD);
+
+/*
+ *  GPS Init
+ */
+TinyGPS gps;
+float distanceSinceLastMessage = 0;
+float latitude = TinyGPS::GPS_INVALID_F_ANGLE;
+float longitude = TinyGPS::GPS_INVALID_F_ANGLE;
+
 
 DigitalOut statusLed(LED1);
 
+/*
+ *  OBD Init
+ */
 uint16_t allowedPIDs[12] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
 
 typedef int16_t (*parseFunc)(char*);
@@ -82,7 +99,6 @@ const parseFunc parseFuncs[] = {
 };
 
 // Setup SD
-// Setup GPS
 
 
 /*void onReceive(){
@@ -100,13 +116,7 @@ int main(){
 
     GPSManager();
     OBDManager();
-    //PackageManager();
-
-
-
-
-
-
+    PackageManager();
 
 
     //pc.printf("Hello World !\n");
@@ -141,14 +151,59 @@ int main(){
     }*/
 }
 
+void PackageManager() {
+    static unsigned long lastReset = millis();
+
+    ///Serial.println(F("doing SD stuff"));
+
+    if (millis() - lastReset > SEND_INTERVAL * 1000) {
+        switch (packageBuilderState) {
+        case 0:
+            startPackage(); // Mem - 3%
+            saveTimestamp(); // Mem - 6%
+            savePosition(); // Mem - 0%
+            saveDistanceTravelled(); // Mem - 2%
+            startPIDs(); // Mem - 3%
+            packageBuilderState++;
+            break;
+        case 1:
+            break;
+        case 2:
+            break;
+        case 3:
+            endPIDs(); // Mem - 2%
+            endPackage(); // Mem - 3%
+            //sendPackage(); // Mem - 1%
+            lastReset = millis();
+            distanceSinceLastMessage = 0;
+            packageBuilderState = 0;
+            break;
+        }
+    } else {
+        //Serial.println(SEND_INTERVAL * 1000 - (millis() - lastReset));
+    }
+}
+
+void startPackage() {
+    package = SD.open(F("package"), FILE_WRITE);
+
+    Serial.println(F("starting package"));
+    if (package) {
+        //package.write('h');
+        //package.println("\"msg\" : {");
+    } else {
+        //Serial.println(F("error starting package"));
+    }
+}
+
 void GPSManager() {
     static float lastLatitude = 0;
     static float lastLongitude = 0;
 
     //Serial.println(F("doing GPS stuff"));
 
-    while (softSerial.readable() > 0) {
-        if (gps.encode(softSerial.getc())) {            
+    while (obdSerial.readable() > 0) {
+        if (gps.encode(obdSerial.getc())) {            
             gps.f_get_position(&latitude, &longitude);
             
             //Serial.print("lat: "); Serial.print(latitude, 6); Serial.print(" lng: "); Serial.println(longitude, 6);
