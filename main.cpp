@@ -2,10 +2,28 @@
 #include "mbed.h"
 #include "TinyGPS.h"
 #include <string>
+#include <stdio.h>
 #include "main.h"
 #include "pins.h"
 #include "config.h"
 
+// Block devices
+#include "SDBlockDevice.h"
+// File systems
+#include "FATFileSystem.h"
+
+/*
+ *  SD Init
+ */
+// Physical block device, can be any device that supports the BlockDevice API
+SPIFBlockDevice bd(
+        SD_MOSI,
+        SD_MISO,
+        SD_CLK,
+        SD_CS);
+
+// File system declaration
+FATFileSystem fs("fs");
 
 /*
  *  Serial Init
@@ -25,7 +43,8 @@ float longitude = TinyGPS::GPS_INVALID_F_ANGLE;
 
 
 DigitalOut statusLed(LED1);
-
+statusLed = 0;
+std::string telitData;
 /*
  *  OBD Init
  */
@@ -98,9 +117,6 @@ const parseFunc parseFuncs[] = {
     NULL
 };
 
-// Setup SD
-
-
 /*void onReceive(){
     //pc.printf("datain\n");
     pc.putc(telitSerial.getc());
@@ -111,13 +127,39 @@ int main(){
 
     getAllowedPIDs();
 
+    /*
+     *  SD Init
+     */
+    int err = fs.mount(&bd);
+    if (err){
+        //error message
+    }
+    // File declaration
+    FILE *package = fopen("PACKAGE", "a+");
+    if (!package){
+        //error message
+    }
+    fclose(package);
 
-    //init SD
+    /*
+     *  Telit Init
+     */
+    telitData = "AT+CGDCONT=1,\"IPV4V6\",\"hologram\",,0,0";
+    sendData(telitData);
+    telitData = "AT#SGACT=1,1";
+    sendData(telitData);
+    telitData = "AT#HTTPCFG=0,\"https://fleethive-ddb78.firebaseio.com/.json\",80,0,\"\",\"\",0,120,1";
+    sendData(telitData);
+    telitData ="";
 
-    GPSManager();
-    OBDManager();
-    PackageManager();
-
+    /*
+     *  Main Loop
+     */    
+    while(1){
+        GPSManager();
+        OBDManager();
+        PackageManager();
+    }
 
     //pc.printf("Hello World !\n");
     /*char at[3] = {'A','T','\0'};
@@ -151,6 +193,10 @@ int main(){
     }*/
 }
 
+void sendData(std::string data){
+    telitSerial.printf("%s\r", data);
+}
+
 void PackageManager() {
     static unsigned long lastReset = millis();
 
@@ -159,7 +205,6 @@ void PackageManager() {
     if (millis() - lastReset > SEND_INTERVAL * 1000) {
         switch (packageBuilderState) {
         case 0:
-            startPackage(); // Mem - 3%
             saveTimestamp(); // Mem - 6%
             savePosition(); // Mem - 0%
             saveDistanceTravelled(); // Mem - 2%
@@ -185,17 +230,79 @@ void PackageManager() {
 }
 
 void startPackage() {
-    package = SD.open(F("package"), FILE_WRITE);
-
-    Serial.println(F("starting package"));
-    if (package) {
-        //package.write('h');
-        //package.println("\"msg\" : {");
-    } else {
-        //Serial.println(F("error starting package"));
+    FILE *package = fopen("PACKAGE", "a+");
+    if (!package){
+        //error message
     }
 }
 
+void saveTimestamp() {
+    // Timestamp format: YYYY-MM-DDTHH:MM:SS+03:00
+    //Serial.println(F("saving timestamp"));
+    
+    if (package) {
+        fprintf(package, "\t\"timestamp\": \"\n");
+        int year;
+        byte month, day, hour, minutes, second, hundredths;
+        gps.crack_datetime(&year, &month, &day, &hour, &minutes, &second, &hundredths);
+        
+        char timestamp[25];
+        sprintf(timestamp, "%02d-%02d-%02dT%02d:%02d:%02d-03:00", year, month, day, hour, minutes, second);
+        
+        fprintf(package, "%s\",\n", timestamp);
+    }
+}
+
+void savePosition() {
+    //Serial.println(F("saving position"));
+  
+    if (package) {
+        fprintf(package, "\t\"coord\": {");
+        fprintf(package, "\t\t\"lat\": %.6f,\n", latitude);
+        fprintf(package, "\t\t\"long\": %.6f,\n\t},\n", longitude);
+    }
+}
+
+void saveDistanceTravelled() {
+    //Serial.println(F("saving distance travelled"));
+  
+    if (package) {
+        fprintf(package, "\t\"distanceTravelled\": %.6f,\n", distanceSinceLastMessage);
+    }
+}
+
+void startPIDs() {
+    //Serial.println(F("starting PID section"));
+
+    if (package) {
+        fprintf(package, "\t\"pids\": {\n", );
+    }
+}
+
+void savePID(std::string PID, int16_t val) {
+    //Serial.println(F("saving PID"));
+    
+    if (package) {
+        fprintf(package, "\t\t\"%s\": %i,\n", PID, val);
+    }
+}
+
+void endPIDs() {
+    //Serial.println(F("ending PID section"));
+    
+    if (package) {
+        fprintf(package, "\t},\n");
+    }
+}
+
+void endPackage() {
+    //Serial.println(F("ending package"));
+    
+    if (package) {
+        fprintf(packagr, "\t\"placa\": \"PCU-3455\"\n}");
+        fclose(package);
+    }
+}
 void GPSManager() {
     static float lastLatitude = 0;
     static float lastLongitude = 0;
@@ -230,16 +337,6 @@ float distanceBetweenCoordinates(float latitude1, float longitude1, float latitu
     return R*c;
 }
 
-void savePID(std::string PID, int16_t val) {
-    //Serial.println("saving PID");
-    
-    /*if (package) {
-        package.print(F("\t\t\"")); package.print(PID);package.print(F("\": "));
-        package.print(val);
-        package.println(F(","));
-    }*/
-}
-
 char parsePID(std::string PID) {
     char tmp[3] = {PID[2], PID[3], '\0'};
     
@@ -249,7 +346,7 @@ char parsePID(std::string PID) {
 int16_t obdRead(std::string PID) {
     int16_t iPID = parsePID(PID); // Use the PID to know what function to use for parsing
     char* response;
-    obdSerial.printf("%s", PID.c_str());
+    obdSerial.printf("%s\n", PID.c_str());
     //Serial.print(F("Reading ")); Serial.println((int)iPID);
 
     response = getResponse();

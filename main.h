@@ -1,7 +1,7 @@
 /* This file was automatically generated.  Do not edit! */
 char *getResponse(void);
 char *parseHex(char *data);
-float distanceBetweenCoordinates(float latitude1, float longitude1, float latitude2, float longitude2);
+float distanceBetweenCoordinates(float latitude1,float longitude1,float latitude2,float longitude2);
 int main();
 int16_t parseAirFlowRate(char *response);
 int16_t parseCount(char *response);
@@ -16,7 +16,14 @@ int16_t parseSeconds(char *response);
 int16_t parseSpeed(char *response);
 int16_t parseTemperature(char *response);
 void clearOBDSerial(void);
+void endPackage();
+void endPIDs();
 void getAllowedPIDs();
 void GPSManager();
 void OBDManager();
 void PackageManager();
+void saveDistanceTravelled();
+void savePosition();
+void saveTimestamp();
+void startPackage();
+void startPIDs();

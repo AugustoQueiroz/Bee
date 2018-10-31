@@ -4,3 +4,7 @@
 #define TELIT_TX	PA_2
 #define GPS_RX		PB_6
 #define GPS_TX		PB_7
+#define SD_MOSI		PB_15
+#define SD_MISO		PB_14
+#define SD_CLK		PB_13
+#define SD_CS		PB_12
